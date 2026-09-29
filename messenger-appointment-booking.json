@@ -1,0 +1,456 @@
+{
+  "name": "Messenger Appointment Booking",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Setup Checklist (100% free stack)\nNo OpenAI / LLM is used anywhere in this workflow — it's pure button-and-logic flow.\n\n### 1. Facebook\n- Facebook Developer App → Messenger → Webhooks, subscribe to `messages` and `messaging_postbacks`.\n- Point the webhook at the **Messenger Message Webhook** node URL (POST).\n- Verify Token: set in **Check Verify Token** node, point Facebook's verify callback at **Messenger Verify Webhook** (GET, same path).\n- Get a Page Access Token, put it in **Send Reply to Messenger**. If your old token was ever pasted/shared anywhere outside n8n, regenerate it in Meta for Developers first.\n\n### 2. Google Sheet (acts as your free database)\nColumn headers must be EXACTLY `senderId` (lowercase s, capital I, lowercase d) in both Sessions and Bookings tabs — casing must match exactly or lookups silently fail.\n\n**Sessions** — columns: senderId, step, name, address, phone, email, service, serviceDuration, date, time, updatedAt\n\n**Services** — columns: name, payload, durationMinutes. Example rows:\n| name | payload | durationMinutes |\n|---|---|---|\n| Haircut | HAIRCUT | 30 |\n| Massage | MASSAGE | 60 |\n| Consultation | CONSULT | 45 |\n\n**Bookings** — columns: senderId, name, address, phone, email, service, date, time, createdAt\n\n### 3. Google Calendar\n- Add Google Calendar OAuth2 credential to both Calendar nodes.\n- Any existing event on that calendar counts as BUSY. Block yourself off by adding an event (lunch, day off, existing booking) — the bot will not offer those times.\n\n### 4. Business config\nOpen the **Conversation Engine** code node and edit the constants at the top: business hours, open days, slot interval, days ahead to show.\n\n### Facebook quick reply rules (important!)\nQuick reply button titles must be 20 characters or fewer, or Facebook silently rejects the whole message. This version auto-truncates every button title to 20 chars, but keep your Service names short and readable within that limit.",
+        "height": 1344,
+        "width": 560
+      },
+      "id": "2636333b-a97e-4898-b971-0da0a3ffa130",
+      "name": "Setup Instructions",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [1328, 272]
+    },
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "messenger-webhook",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "0683b96b-ee79-44b2-8739-3450a47ad155",
+      "name": "Messenger Verify Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [3360, 1152],
+      "webhookId": "4c2b1c3d-bcaa-4d5a-870f-56b76d3f002b"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 1},
+          "conditions": [
+            {"id": "c1", "leftValue": "={{ $json.query[\"hub.verify_token\"] }}", "rightValue": {token}, "operator": {"type": "string", "operation": "equals"}},
+            {"id": "c2", "leftValue": "={{ $json.query[\"hub.mode\"] }}", "rightValue": "subscribe", "operator": {"type": "string", "operation": "equals"}}
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "acab65ad-7055-416c-a8a4-39d32a312631",
+      "name": "Check Verify Token",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [3600, 1152]
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ $json.query[\"hub.challenge\"] }}",
+        "options": {"responseCode": 200}
+      },
+      "id": "5b9f7ad7-a04c-4c41-babf-5c9636276b65",
+      "name": "Respond Challenge",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [3840, 1056]
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "Verification failed",
+        "options": {"responseCode": 403}
+      },
+      "id": "b48d84a4-0197-400e-ae64-63c6c1e71b09",
+      "name": "Respond Forbidden",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [3840, 1264]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "messenger-webhook",
+        "responseMode": "onReceived",
+        "responseData": "noData",
+        "options": {"responseCode": 200}
+      },
+      "id": "b3b080c9-0b23-47c8-957e-b96bb5d5a703",
+      "name": "Messenger Message Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [3360, 1472],
+      "webhookId": "115d9cf4-fd9b-49dc-b07b-83611876b59d"
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body || {};\nconst entry = (body.entry && body.entry[0]) || {};\nconst messagingEvent = (entry.messaging && entry.messaging[0]) || {};\n\nconst senderId = messagingEvent.sender ? messagingEvent.sender.id : '';\nlet text = '';\nlet payload = '';\nlet isEcho = false;\n\nif (messagingEvent.message) {\n  text = messagingEvent.message.text || '';\n  isEcho = !!messagingEvent.message.is_echo;\n  if (messagingEvent.message.quick_reply) {\n    payload = messagingEvent.message.quick_reply.payload || '';\n  }\n} else if (messagingEvent.postback) {\n  text = messagingEvent.postback.title || '';\n  payload = messagingEvent.postback.payload || '';\n}\n\nreturn [{\n  json: {\n    senderId,\n    text: text.trim(),\n    textLower: text.trim().toLowerCase(),\n    payload,\n    isEcho\n  }\n}];"
+      },
+      "id": "c8326c3b-cfb1-44c7-b176-375276b9ffd4",
+      "name": "Extract Message Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3600, 1472]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 1},
+          "conditions": [
+            {"id": "c1", "leftValue": "={{ $json.senderId }}", "rightValue": "", "operator": {"type": "string", "operation": "notEmpty"}},
+            {"id": "c2", "leftValue": "={{ $json.isEcho }}", "rightValue": true, "operator": {"type": "boolean", "operation": "notEquals"}}
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "05f3bfa7-7ea7-43d3-a2ef-86aaf2160817",
+      "name": "Is Text Message?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [3840, 1472]
+    },
+    {
+      "parameters": {},
+      "id": "a4f92876-457e-4deb-93f7-80c422c8b7f6",
+      "name": "No Operation - Ignore",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [4080, 1632]
+    },
+    {
+      "parameters": {
+        "documentId": {"__rl": true, "value": {id}, "mode": "id"},
+        "sheetName": {"mode": "name", "value": "Sessions"},
+        "filtersUI": {"values": [{"lookupColumn": "senderId", "lookupValue": "={{ $json.senderId }}"}]},
+        "options": {}
+      },
+      "id": "147c6fe4-d1e7-4f22-8d3d-2d628d36c8be",
+      "name": "Get Session",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [4080, 1424],
+      "alwaysOutputData": true,
+      "credentials": {
+        "googleSheetsOAuth2Api": {"id": {google_id}, "name": "Google Sheets account"}
+      }
+    },
+    {
+      "parameters": {
+        "documentId": {"__rl": true, "value": {id}, "mode": "id"},
+        "sheetName": {"mode": "name", "value": "Services"},
+        "options": {}
+      },
+      "id": "1a322136-b3b8-4b65-8e2a-985ac84d9208",
+      "name": "Get Services",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [4320, 1424],
+      "alwaysOutputData": true,
+      "credentials": {
+        "googleSheetsOAuth2Api": {"id": {google_id}, "name": "Google Sheets account"}
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// ==== BUSINESS CONFIG - edit these ====\nconst BUSINESS_START_HOUR = 9;\nconst BUSINESS_END_HOUR = 18;\nconst OPEN_DAYS = [1,2,3,4,5,6]; // 0=Sun ... 6=Sat, Mon-Sat here\nconst DAYS_AHEAD_TO_SHOW = 14;\n// ========================================\n\nconst msg = $('Extract Message Data').item.json;\nconst sessionRows = $('Get Session').all();\nconst servicesRows = $('Get Services').all();\n\nconst services = servicesRows\n  .filter(r => r.json && r.json.name)\n  .map(r => ({\n    name: r.json.name,\n    payload: r.json.payload,\n    durationMinutes: parseInt(r.json.durationMinutes, 10) || 30\n  }));\n\nconst foundRow = sessionRows.find(r => r.json && r.json.senderId === msg.senderId);\nlet session = foundRow ? { ...foundRow.json } : {\n  senderId: msg.senderId, step: 'NEW', name: '', address: '', phone: '',\n  email: '', service: '', serviceDuration: '', date: '', time: ''\n};\n\nconst RESTART_WORDS = ['menu', 'restart', 'start over', 'cancel'];\nif (session.step === 'DONE' || RESTART_WORDS.includes(msg.textLower)) {\n  session.step = 'NEW';\n}\n\n// Facebook quick reply titles must be 20 chars or fewer, or the whole message is rejected\nfunction quickReplies(options) {\n  return options.map(o => ({ content_type: 'text', title: (o.title || '').slice(0, 20), payload: o.payload }));\n}\nfunction reply(text, qr) {\n  return { text, quick_replies: qr && qr.length ? qr : undefined };\n}\nconst MAIN_MENU_QR = quickReplies([\n  { title: 'Book Appointment', payload: 'BOOK_APPT' },\n  { title: 'Live Agent', payload: 'LIVE_AGENT' }\n]);\n\nlet action = 'REPLY';\nlet out = { session, reply: null, senderId: msg.senderId };\n\nswitch (session.step) {\n  case 'NEW': {\n    session.step = 'AWAIT_CHOICE';\n    out.reply = reply(\"Hi! \\ud83d\\udc4b Would you like to book an appointment or chat with a live person?\", MAIN_MENU_QR);\n    break;\n  }\n  case 'AWAIT_CHOICE': {\n    if (msg.payload === 'LIVE_AGENT') {\n      session.step = 'LIVE_AGENT';\n      out.reply = reply(\"Sure! A team member will reply to you here shortly. \\ud83d\\ude42\");\n    } else {\n      session.step = 'AWAIT_NAME';\n      out.reply = reply(\"Great, let's get you booked. What's your full name?\");\n    }\n    break;\n  }\n  case 'AWAIT_NAME': {\n    session.name = msg.text;\n    session.step = 'AWAIT_ADDRESS';\n    out.reply = reply(`Thanks, ${session.name}! What's your address?`);\n    break;\n  }\n  case 'AWAIT_ADDRESS': {\n    session.address = msg.text;\n    session.step = 'AWAIT_PHONE';\n    out.reply = reply(\"Got it. What's the best phone number to reach you?\");\n    break;\n  }\n  case 'AWAIT_PHONE': {\n    session.phone = msg.text;\n    session.step = 'AWAIT_EMAIL';\n    out.reply = reply(\"Thanks! What's your email address?\");\n    break;\n  }\n  case 'AWAIT_EMAIL': {\n    session.email = msg.text;\n    session.step = 'AWAIT_SERVICE';\n    out.reply = reply(\"What type of service would you like to book?\",\n      quickReplies(services.slice(0, 11).map(s => ({ title: s.name, payload: `SERVICE_${s.payload}` }))));\n    break;\n  }\n  case 'AWAIT_SERVICE': {\n    const code = (msg.payload || '').replace('SERVICE_', '');\n    const chosen = services.find(s => s.payload === code) || services.find(s => s.name.toLowerCase() === msg.textLower);\n    if (!chosen) {\n      out.reply = reply(\"Sorry, please choose a service from the list below.\",\n        quickReplies(services.slice(0, 11).map(s => ({ title: s.name, payload: `SERVICE_${s.payload}` }))));\n      break;\n    }\n    session.service = chosen.name;\n    session.serviceDuration = chosen.durationMinutes;\n    action = 'NEED_DATES';\n    break;\n  }\n  case 'AWAIT_DATE': {\n    const chosenDate = (msg.payload || '').replace('DATE_', '');\n    if (!chosenDate) {\n      out.reply = reply(\"Please pick one of the available dates above.\");\n      break;\n    }\n    session.date = chosenDate;\n    action = 'NEED_TIMES';\n    break;\n  }\n  case 'AWAIT_TIME': {\n    const chosenTime = (msg.payload || '').replace('TIME_', '');\n    if (!chosenTime) {\n      out.reply = reply(\"Please pick one of the available times above.\");\n      break;\n    }\n    session.time = chosenTime;\n    session.step = 'AWAIT_CONFIRM';\n    out.reply = reply(\n      `Please confirm:\\n\\nService: ${session.service}\\nDate: ${session.date}\\nTime: ${session.time}\\nName: ${session.name}\\nPhone: ${session.phone}\\n\\nShall I book this?`,\n      quickReplies([{ title: 'Yes, book it', payload: 'CONFIRM_YES' }, { title: 'No, start over', payload: 'CONFIRM_NO' }])\n    );\n    break;\n  }\n  case 'AWAIT_CONFIRM': {\n    if (msg.payload === 'CONFIRM_YES') {\n      action = 'CREATE_BOOKING';\n    } else {\n      session.step = 'AWAIT_CHOICE';\n      out.reply = reply(\"No problem, let's start over. Would you like to book an appointment or chat with a live person?\", MAIN_MENU_QR);\n    }\n    break;\n  }\n  case 'LIVE_AGENT': {\n    out.reply = null;\n    break;\n  }\n  default: {\n    session.step = 'AWAIT_CHOICE';\n    out.reply = reply(\"Hi! Would you like to book an appointment or chat with a live person?\", MAIN_MENU_QR);\n  }\n}\n\nout.action = action;\nreturn [{ json: out }];"
+      },
+      "id": "4392c10d-6c58-44bd-82c3-a96d9b4cd97b",
+      "name": "Conversation Engine",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [4560, 1424]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {"conditions": {"options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 1}, "conditions": [{"id": "r1", "leftValue": "={{ $json.action }}", "rightValue": "REPLY", "operator": {"type": "string", "operation": "equals"}}], "combinator": "and"}, "outputKey": "REPLY"},
+            {"conditions": {"options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 1}, "conditions": [{"id": "r2", "leftValue": "={{ $json.action }}", "rightValue": "NEED_DATES", "operator": {"type": "string", "operation": "equals"}}], "combinator": "and"}, "outputKey": "NEED_DATES"},
+            {"conditions": {"options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 1}, "conditions": [{"id": "r3", "leftValue": "={{ $json.action }}", "rightValue": "NEED_TIMES", "operator": {"type": "string", "operation": "equals"}}], "combinator": "and"}, "outputKey": "NEED_TIMES"},
+            {"conditions": {"options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 1}, "conditions": [{"id": "r4", "leftValue": "={{ $json.action }}", "rightValue": "CREATE_BOOKING", "operator": {"type": "string", "operation": "equals"}}], "combinator": "and"}, "outputKey": "CREATE_BOOKING"}
+          ]
+        },
+        "options": {}
+      },
+      "id": "4628dbe8-ad2f-4dda-9598-400e3a4f3bc5",
+      "name": "Route by Action",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [4800, 1424]
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "calendar": {"__rl": true, "value": {email}, "mode": "list", "cachedResultName": {email}},
+        "returnAll": true,
+        "options": {
+          "timeMin": "={{ $now.toISO() }}",
+          "timeMax": "={{ $now.plus({ days: 14 }).toISO() }}"
+        }
+      },
+      "id": "b5f6d6bb-50a2-4a30-b5f8-0ee2c3c2d453",
+      "name": "Get Calendar Events (Next 14 Days)",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.3,
+      "position": [5040, 1200],
+      "alwaysOutputData": true,
+      "credentials": {
+        "googleCalendarOAuth2Api": {"id": "{google_id}", "name": "Google Calendar account"}
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const engine = $('Conversation Engine').first().json;\nconst session = engine.session;\nconst events = $input.all().map(i => i.json).filter(e => e && e.start && (e.start.dateTime || e.start.date));\n\nconst BUSINESS_START_HOUR = 9;\nconst BUSINESS_END_HOUR = 18;\nconst OPEN_DAYS = [1,2,3,4,5,6];\nconst DAYS_AHEAD = 14;\nconst BUSINESS_TZ_OFFSET = '+08:00'; // Asia/Manila - change if your business is elsewhere\nconst BUSINESS_TZ_NAME = 'Asia/Manila';\nconst durationMin = parseInt(session.serviceDuration, 10) || 30;\n\nfunction pad(n) { return String(n).padStart(2, '0'); }\nfunction manilaDateStr(epochMs) {\n  return new Date(epochMs + 8 * 3600000).toISOString().slice(0, 10);\n}\n\nconst busy = events.map(e => ({\n  start: new Date(e.start.dateTime || e.start.date).getTime(),\n  end: new Date(e.end.dateTime || e.end.date).getTime()\n}));\n\nconst todayStr = manilaDateStr(Date.now());\nconst todayMidnightMs = new Date(`${todayStr}T00:00:00${BUSINESS_TZ_OFFSET}`).getTime();\n\nfunction hasFreeSlot(dateStr) {\n  const dayStartMs = new Date(`${dateStr}T${pad(BUSINESS_START_HOUR)}:00:00${BUSINESS_TZ_OFFSET}`).getTime();\n  const dayEndMs = new Date(`${dateStr}T${pad(BUSINESS_END_HOUR)}:00:00${BUSINESS_TZ_OFFSET}`).getTime();\n  let cursor = dayStartMs;\n  while (cursor + durationMin * 60000 <= dayEndMs) {\n    const slotEnd = cursor + durationMin * 60000;\n    const overlap = busy.some(b => cursor < b.end && slotEnd > b.start);\n    if (!overlap) return true;\n    cursor += 30 * 60000;\n  }\n  return false;\n}\n\nconst availableDates = [];\nfor (let i = 1; i <= DAYS_AHEAD && availableDates.length < 10; i++) {\n  const dayMs = todayMidnightMs + i * 86400000;\n  const dateStr = manilaDateStr(dayMs);\n  const dow = new Date(`${dateStr}T12:00:00${BUSINESS_TZ_OFFSET}`).getUTCDay();\n  if (!OPEN_DAYS.includes(dow)) continue;\n  if (hasFreeSlot(dateStr)) availableDates.push(dateStr);\n}\n\nconst quick_replies = availableDates.map(dateStr => {\n  const label = new Date(`${dateStr}T12:00:00${BUSINESS_TZ_OFFSET}`)\n    .toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: BUSINESS_TZ_NAME });\n  return { content_type: 'text', title: label.slice(0, 20), payload: `DATE_${dateStr}` };\n});\n\nsession.step = 'AWAIT_DATE';\n\nreturn [{\n  json: {\n    session,\n    senderId: engine.senderId,\n    reply: {\n      text: availableDates.length\n        ? `Great, you'd like ${session.service}. Here are the next available dates:`\n        : \"Sorry, there are no available dates in the next two weeks. Please contact us directly.\",\n      quick_replies: quick_replies.length ? quick_replies : undefined\n    }\n  }\n}];"
+      },
+      "id": "5db73fc7-60cf-4885-9e63-467ed8bbf2bf",
+      "name": "Compute Available Dates",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [5280, 1200]
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "calendar": {"__rl": true, "value": {email}, "mode": "list", "cachedResultName": {email}},
+        "returnAll": true,
+        "options": {
+          "timeMin": "={{ $('Conversation Engine').first().json.session.date }}T00:00:00",
+          "timeMax": "={{ $('Conversation Engine').first().json.session.date }}T23:59:59"
+        }
+      },
+      "id": "cbcbd7e3-5ad5-49cf-a9ca-0e29e0bfd5e4",
+      "name": "Get Calendar Events (Chosen Date)",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.3,
+      "position": [5040, 1424],
+      "alwaysOutputData": true,
+      "credentials": {
+        "googleCalendarOAuth2Api": {"id": "{google_id}", "name": "Google Calendar account"}
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const engine = $('Conversation Engine').first().json;\nconst session = engine.session;\nconst events = $input.all().map(i => i.json).filter(e => e && e.start && (e.start.dateTime || e.start.date));\n\nconst BUSINESS_START_HOUR = 9;\nconst BUSINESS_END_HOUR = 18;\nconst BUSINESS_TZ_OFFSET = '+08:00'; // Asia/Manila - change if your business is elsewhere\nconst BUSINESS_TZ_NAME = 'Asia/Manila';\nconst durationMin = parseInt(session.serviceDuration, 10) || 30;\n\nfunction pad(n) { return String(n).padStart(2, '0'); }\n\nconst busy = events.map(e => ({\n  start: new Date(e.start.dateTime || e.start.date).getTime(),\n  end: new Date(e.end.dateTime || e.end.date).getTime()\n}));\n\nconst dateStr = session.date;\nconst dayStartMs = new Date(`${dateStr}T${pad(BUSINESS_START_HOUR)}:00:00${BUSINESS_TZ_OFFSET}`).getTime();\nconst dayEndMs = new Date(`${dateStr}T${pad(BUSINESS_END_HOUR)}:00:00${BUSINESS_TZ_OFFSET}`).getTime();\n\nconst slots = [];\nlet cursor = dayStartMs;\nwhile (cursor + durationMin * 60000 <= dayEndMs) {\n  const slotEnd = cursor + durationMin * 60000;\n  const overlap = busy.some(b => cursor < b.end && slotEnd > b.start);\n  if (!overlap) slots.push(cursor);\n  cursor += 30 * 60000;\n}\n\nconst quick_replies = slots.slice(0, 11).map(ms => {\n  const label = new Date(ms).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: BUSINESS_TZ_NAME });\n  const manilaMs = ms + 8 * 3600000;\n  const hh = pad(new Date(manilaMs).getUTCHours());\n  const mm = pad(new Date(manilaMs).getUTCMinutes());\n  return { content_type: 'text', title: label.slice(0, 20), payload: `TIME_${hh}:${mm}` };\n});\n\nsession.step = slots.length ? 'AWAIT_TIME' : 'AWAIT_DATE';\n\nreturn [{\n  json: {\n    session,\n    senderId: engine.senderId,\n    reply: {\n      text: slots.length ? `Available times on ${session.date}:` : `Sorry, no open times on ${session.date}. Please pick another date.`,\n      quick_replies: quick_replies.length ? quick_replies : undefined\n    }\n  }\n}];"
+      },
+      "id": "b7a938dd-76e4-41be-aef4-146c51f92cb1",
+      "name": "Compute Available Times",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [5280, 1424]
+    },
+    {
+      "parameters": {
+        "jsCode": "const engine = $('Conversation Engine').first().json;\nconst session = engine.session;\nconst durationMin = parseInt(session.serviceDuration, 10) || 30;\nconst BUSINESS_TZ_OFFSET = '+08:00'; // Asia/Manila - change if your business is elsewhere\nconst start = new Date(`${session.date}T${session.time}:00${BUSINESS_TZ_OFFSET}`);\nconst end = new Date(start.getTime() + durationMin * 60000);\n\nreturn [{\n  json: {\n    session,\n    senderId: engine.senderId,\n    startISO: start.toISOString(),\n    endISO: end.toISOString()\n  }\n}];"
+      },
+      "id": "e0b9f4f2-167b-4543-88ba-ebd7b439cd7e",
+      "name": "Prepare Booking Times",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [5040, 1632]
+    },
+    {
+      "parameters": {
+        "calendar": {"__rl": true, "value": {email}, "mode": "list", "cachedResultName": {email}},
+        "start": "={{ $json.startISO }}",
+        "end": "={{ $json.endISO }}",
+        "additionalFields": {
+          "description": "={{ 'Phone: ' + $json.session.phone + '\\nEmail: ' + $json.session.email + '\\nAddress: ' + $json.session.address }}",
+          "summary": "={{ $json.session.service + ' - ' + $json.session.name }}"
+        }
+      },
+      "id": "341de75a-2257-45bb-a10c-b26ee73bea30",
+      "name": "Create Booking Event",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.3,
+      "position": [5280, 1632],
+      "credentials": {
+        "googleCalendarOAuth2Api": {"id": "{google_id}", "name": "Google Calendar account"}
+      }
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {"__rl": true, "value": {id}, "mode": "id"},
+        "sheetName": {"mode": "name", "value": "Bookings"},
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "senderId": "={{ $('Prepare Booking Times').first().json.senderId }}",
+            "name": "={{ $('Prepare Booking Times').first().json.session.name }}",
+            "address": "={{ $('Prepare Booking Times').first().json.session.address }}",
+            "phone": "={{ $('Prepare Booking Times').first().json.session.phone }}",
+            "email": "={{ $('Prepare Booking Times').first().json.session.email }}",
+            "service": "={{ $('Prepare Booking Times').first().json.session.service }}",
+            "date": "={{ $('Prepare Booking Times').first().json.session.date }}",
+            "time": "={{ $('Prepare Booking Times').first().json.session.time }}",
+            "createdAt": "={{ $now.toISO() }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {"id": "senderId", "displayName": "senderId", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true, "removed": false},
+            {"id": "name", "displayName": "name", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true},
+            {"id": "address", "displayName": "address", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true},
+            {"id": "phone", "displayName": "phone", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true},
+            {"id": "email", "displayName": "email", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true},
+            {"id": "service", "displayName": "service", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true},
+            {"id": "date", "displayName": "date", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true},
+            {"id": "time", "displayName": "time", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true},
+            {"id": "createdAt", "displayName": "createdAt", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true}
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "d0c2c28c-7f2f-48af-b0cf-5c724d705294",
+      "name": "Log Booking",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [5520, 1632],
+      "credentials": {
+        "googleSheetsOAuth2Api": {"id": {google_id}, "name": "Google Sheets account"}
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const engine = $('Conversation Engine').first().json;\nconst session = { ...engine.session, step: 'NEW', date: '', time: '', service: '', serviceDuration: '' };\n\nreturn [{\n  json: {\n    session,\n    senderId: engine.senderId,\n    reply: {\n      text: `You're all set! \\u2705\\n\\n${engine.session.service} booked for ${engine.session.date} at ${engine.session.time}.\\nWe'll see you then, ${engine.session.name}! Reply \\\"menu\\\" anytime to book again.`\n    }\n  }\n}];"
+      },
+      "id": "3ff10c10-202d-4727-8758-716f89032150",
+      "name": "Build Confirmation Reply",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [5760, 1632]
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {"__rl": true, "value": {id}, "mode": "id"},
+        "sheetName": {"mode": "name", "value": "Sessions"},
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "senderId": "={{ $json.session.senderId }}",
+            "step": "={{ $json.session.step }}",
+            "name": "={{ $json.session.name }}",
+            "address": "={{ $json.session.address }}",
+            "phone": "={{ $json.session.phone }}",
+            "email": "={{ $json.session.email }}",
+            "service": "={{ $json.session.service }}",
+            "serviceDuration": "={{ $json.session.serviceDuration }}",
+            "date": "={{ $json.session.date }}",
+            "time": "={{ $json.session.time }}",
+            "updatedAt": "={{ $now.toISO() }}"
+          },
+          "matchingColumns": ["senderId"],
+          "schema": [
+            {"id": "senderId", "displayName": "senderId", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true, "removed": false},
+            {"id": "step", "displayName": "step", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true},
+            {"id": "name", "displayName": "name", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true},
+            {"id": "address", "displayName": "address", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true},
+            {"id": "phone", "displayName": "phone", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true},
+            {"id": "email", "displayName": "email", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true},
+            {"id": "service", "displayName": "service", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true},
+            {"id": "serviceDuration", "displayName": "serviceDuration", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true},
+            {"id": "date", "displayName": "date", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true},
+            {"id": "time", "displayName": "time", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true},
+            {"id": "updatedAt", "displayName": "updatedAt", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true}
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "6fedfc0d-4510-4797-adb7-41999773b7d5",
+      "name": "Update Session",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [5280, 1856],
+      "credentials": {
+        "googleSheetsOAuth2Api": {"id": {google_id}, "name": "Google Sheets account"}
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 1},
+          "conditions": [
+            {"id": "c1", "leftValue": "={{ !!$json.reply }}", "rightValue": true, "operator": {"type": "boolean", "operation": "equals"}}
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "023579a1-e98f-4a6f-93f0-72ff935c72a9",
+      "name": "Has Reply?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [5040, 1856]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://graph.facebook.com/v18.0/me/messages",
+        "sendQuery": true,
+        "queryParameters": {"parameters": [{"name": "access_token", "value": "YOUR_NEW_PAGE_ACCESS_TOKEN"}]},
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ recipient: { id: $json.senderId }, messaging_type: 'RESPONSE', message: Object.assign({ text: $json.reply.text }, $json.reply.quick_replies ? { quick_replies: $json.reply.quick_replies } : {}) }) }}",
+        "options": {}
+      },
+      "id": "bad7bf98-6f3c-44d9-b451-19fb09740836",
+      "name": "Send Reply to Messenger",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [4800, 1776]
+    },
+    {
+      "parameters": {},
+      "id": "5c6bacf2-76d7-4a8a-8739-6b2047064a2f",
+      "name": "No Operation - Live Agent",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [4800, 1936]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Messenger Verify Webhook": {"main": [[{"node": "Check Verify Token", "type": "main", "index": 0}]]},
+    "Check Verify Token": {"main": [[{"node": "Respond Challenge", "type": "main", "index": 0}], [{"node": "Respond Forbidden", "type": "main", "index": 0}]]},
+    "Messenger Message Webhook": {"main": [[{"node": "Extract Message Data", "type": "main", "index": 0}]]},
+    "Extract Message Data": {"main": [[{"node": "Is Text Message?", "type": "main", "index": 0}]]},
+    "Is Text Message?": {"main": [[{"node": "Get Session", "type": "main", "index": 0}], [{"node": "No Operation - Ignore", "type": "main", "index": 0}]]},
+    "Get Session": {"main": [[{"node": "Get Services", "type": "main", "index": 0}]]},
+    "Get Services": {"main": [[{"node": "Conversation Engine", "type": "main", "index": 0}]]},
+    "Conversation Engine": {"main": [[{"node": "Route by Action", "type": "main", "index": 0}]]},
+    "Route by Action": {
+      "main": [
+        [{"node": "Update Session", "type": "main", "index": 0}, {"node": "Has Reply?", "type": "main", "index": 0}],
+        [{"node": "Get Calendar Events (Next 14 Days)", "type": "main", "index": 0}],
+        [{"node": "Get Calendar Events (Chosen Date)", "type": "main", "index": 0}],
+        [{"node": "Prepare Booking Times", "type": "main", "index": 0}]
+      ]
+    },
+    "Get Calendar Events (Next 14 Days)": {"main": [[{"node": "Compute Available Dates", "type": "main", "index": 0}]]},
+    "Compute Available Dates": {"main": [[{"node": "Update Session", "type": "main", "index": 0}, {"node": "Has Reply?", "type": "main", "index": 0}]]},
+    "Get Calendar Events (Chosen Date)": {"main": [[{"node": "Compute Available Times", "type": "main", "index": 0}]]},
+    "Compute Available Times": {"main": [[{"node": "Update Session", "type": "main", "index": 0}, {"node": "Has Reply?", "type": "main", "index": 0}]]},
+    "Prepare Booking Times": {"main": [[{"node": "Create Booking Event", "type": "main", "index": 0}]]},
+    "Create Booking Event": {"main": [[{"node": "Log Booking", "type": "main", "index": 0}]]},
+    "Log Booking": {"main": [[{"node": "Build Confirmation Reply", "type": "main", "index": 0}]]},
+    "Build Confirmation Reply": {"main": [[{"node": "Update Session", "type": "main", "index": 0}, {"node": "Has Reply?", "type": "main", "index": 0}]]},
+    "Has Reply?": {"main": [[{"node": "Send Reply to Messenger", "type": "main", "index": 0}], [{"node": "No Operation - Live Agent", "type": "main", "index": 0}]]}
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "tags": []
+}
